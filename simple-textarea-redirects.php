@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Simple Textarea Redirects
- * Description: Manage simple and auto-detected regex-based redirects via a textarea. Redirects are stored in the options table.
- * Version: 1.0.1
+ * Description: Manage redirects with separate textareas for high-performance simple redirects and powerful regex redirects.
+ * Version: 1.2.0
  * Author: Gemini
  * Author URI: https://gemini.google.com
  * Requires PHP: 8.1
@@ -26,18 +26,17 @@ if ( ! defined( 'WPINC' ) ) {
  */
 final class SimpleTextareaRedirectsPlugin {
 
-    private const OPTION_NAME = 'str_redirect_rules_list_namespaced_class';
+    private const SIMPLE_OPTION_NAME = 'str_redirect_rules_simple_map'; // Changed to reflect it's a map
+    private const REGEX_OPTION_NAME = 'str_redirect_rules_regex_list';
+    private const SIMPLE_TEXTAREA_NAME_LEGACY = 'str_redirect_rules_simple_list'; // For migration
     private const SETTINGS_SLUG = 'simple-textarea-redirects-settings';
     private const NONCE_ACTION = 'str_save_redirects_nonce_action';
     private const NONCE_NAME = 'str_save_redirects_nonce_field';
 
     /**
-     * Initializes the plugin by setting up hooks.
      * Private constructor to prevent direct instantiation.
      */
-    private function __construct() {
-        // This constructor is private to ensure the class is only used statically or via a specific init method.
-    }
+    private function __construct() {}
 
     /**
      * Setup plugin hooks.
@@ -66,9 +65,15 @@ final class SimpleTextareaRedirectsPlugin {
      * Render the settings page.
      */
     public static function render_settings_page(): void {
+        // One-time migration check for users updating from a pre-1.2.0 version
+        $redirect_map = \get_option( self::SIMPLE_OPTION_NAME, null );
+        if ($redirect_map === null && \get_option( self::SIMPLE_TEXTAREA_NAME_LEGACY ) !== false) {
+            // Data exists in old format, but not in new. Trigger a resave to migrate.
+            self::save_redirect_rules_from_string(\get_option( self::SIMPLE_TEXTAREA_NAME_LEGACY, '' ));
+        }
         ?>
         <div class="wrap">
-            <h1><?php \esc_html_e( 'Textarea Redirects (Auto-Detected Regex)', 'simple-textarea-redirects' ); ?></h1>
+            <h1><?php \esc_html_e( 'Optimized Textarea Redirects', 'simple-textarea-redirects' ); ?></h1>
             
             <?php
             if ( isset( $_GET['settings-updated'] ) && $_GET['settings-updated'] === 'true' ) {
@@ -81,80 +86,64 @@ final class SimpleTextareaRedirectsPlugin {
                 <input type="hidden" name="action" value="str_save_redirect_rules">
                 <?php \wp_nonce_field( self::NONCE_ACTION, self::NONCE_NAME ); ?>
 
+                <h2><?php \esc_html_e( 'Simple Redirects (Exact Match)', 'simple-textarea-redirects' ); ?></h2>
+                <p><?php \esc_html_e( 'These are checked first using a hash map for instant lookups. Use for one-to-one redirects.', 'simple-textarea-redirects' ); ?></p>
                 <table class="form-table">
                     <tr valign="top">
                         <th scope="row">
-                            <label for="redirect_rules_textarea">
-                                <?php \esc_html_e( 'Redirect Rules', 'simple-textarea-redirects' ); ?>
+                            <label for="simple_redirect_rules_textarea">
+                                <?php \esc_html_e( 'Simple Redirect Rules', 'simple-textarea-redirects' ); ?>
                             </label>
                         </th>
                         <td>
-                            <textarea id="redirect_rules_textarea" name="redirect_rules_textarea" rows="20" cols="80" class="large-text code"><?php
-                                echo \esc_textarea( (string) \get_option( self::OPTION_NAME, '' ) );
+                            <textarea id="simple_redirect_rules_textarea" name="simple_redirect_rules_textarea" rows="15" cols="80" class="large-text code"><?php
+                                echo \esc_textarea( self::get_simple_rules_as_string() );
                             ?></textarea>
                             <p class="description">
-                                <?php 
-                                printf( 
-                                    \esc_html__( 'Enter one redirect per line. Format: %s', 'simple-textarea-redirects' ), 
-                                    '<code>source_path_or_regex destination_url_or_template [status_code]</code>' 
-                                ); 
-                                ?><br><br>
-                                <strong><?php \esc_html_e( 'Automatic Regex Detection:', 'simple-textarea-redirects' ); ?></strong><br>
-                                - <?php 
-                                printf( 
-                                    \esc_html__( 'The plugin will attempt to automatically detect if a source is a regular expression.', 'simple-textarea-redirects' )
-                                ); 
-                                ?><br>
-                                - <?php 
-                                printf( 
-                                    \esc_html__( 'A source is treated as regex if it includes PCRE delimiters (e.g., %1$s or %2$s) and compiles correctly.', 'simple-textarea-redirects' ), 
-                                    '<code>/pattern/i</code>', 
-                                    '<code>#pattern#</code>' 
-                                ); 
-                                ?><br>
-                                - <?php 
-                                printf( 
-                                    \wp_kses( /* translators: 1: regex chars example, 2: delimiter example, 3: source example, 4: result example */
-                                        __( 'It may also be treated as regex if it lacks delimiters but contains common regex characters (%1$s etc.). The plugin will attempt to auto-delimit these with %2$s (e.g., %3$s becomes %4$s) and use it if it compiles.', 'simple-textarea-redirects' ),
-                                        [ 'code' => [] ] // Allow <code> tags
-                                    ),
-                                    '<code>^ $ * + ? ( ) [ ] { } | \\d</code>', 
-                                    '<code>#</code>', 
-                                    '<code>^/path(.*)$</code>', 
-                                    '<code>#^/path(.*)$#</code>' 
-                                ); 
-                                ?><br>
-                                - <?php 
-                                printf( 
-                                    \esc_html__( 'Simple paths like %s without specific regex operators will usually be treated as exact matches.', 'simple-textarea-redirects' ), 
-                                    '<code>/my-old-page/</code>' 
-                                ); 
-                                ?><br>
-                                - <?php \esc_html_e( 'For regex, use <code>$1</code>, <code>$2</code>, etc., in the destination for capture group backreferences.', 'simple-textarea-redirects' ); // This one is fine as <code> is outside
-                                ?><br>
-                                <br>
-                                <strong><?php \esc_html_e( 'Examples:', 'simple-textarea-redirects' ); ?></strong><br>
-                                - <?php \esc_html_e( 'Exact Match:', 'simple-textarea-redirects' ); ?> <code>/old-page /new-page 301</code><br>
-                                - <?php \esc_html_e( 'Regex (auto-detected, no delimiters needed):', 'simple-textarea-redirects' ); ?> <code>^/products/(\d+)/(.*)$ /shop/item/$1/$2 301</code><br>
-                                - <?php \esc_html_e( 'Regex (with your own delimiters):', 'simple-textarea-redirects' ); ?> <code>#/category/(.*)/feed# /feeds/$1 302</code><br>
-                                <br>
-                                <strong><?php \esc_html_e( 'General Notes:', 'simple-textarea-redirects' ); ?></strong><br>
-                                - <?php \esc_html_e( 'Destination URLs can be relative paths (e.g., `/new-page`) or full URLs (e.g., `https://othersite.com`).', 'simple-textarea-redirects' ); ?><br>
-                                - <?php \esc_html_e( 'Supported status codes: 301, 302, 307, 308. If omitted, 301 (Permanent) is used.', 'simple-textarea-redirects' ); ?><br>
-                                - <?php \esc_html_e( 'Lines starting with # will be ignored as comments.', 'simple-textarea-redirects' ); ?><br>
-                                - <?php \esc_html_e( 'Be cautious with regex, as complex patterns can impact site performance. Test thoroughly.', 'simple-textarea-redirects' ); ?>
+                                <?php printf( \esc_html__( 'Format: %s', 'simple-textarea-redirects' ), '<code>source_path destination_url [status_code]</code>' ); ?><br>
+                                - <?php printf( \esc_html__( 'Example: %s', 'simple-textarea-redirects' ), '<code>/old-about-us /about 301</code>' ); ?>
                             </p>
                         </td>
                     </tr>
                 </table>
-                <?php \submit_button( \__( 'Save Redirects', 'simple-textarea-redirects' ) ); ?>
+                
+                <hr>
+
+                <h2><?php \esc_html_e( 'Regex Redirects (Regular Expressions)', 'simple-textarea-redirects' ); ?></h2>
+                <p><?php \esc_html_e( 'These are checked only if no simple redirect is found. Use for complex pattern matching.', 'simple-textarea-redirects' ); ?></p>
+                <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">
+                            <label for="regex_redirect_rules_textarea">
+                                <?php \esc_html_e( 'Regex Redirect Rules', 'simple-textarea-redirects' ); ?>
+                            </label>
+                        </th>
+                        <td>
+                            <textarea id="regex_redirect_rules_textarea" name="regex_redirect_rules_textarea" rows="15" cols="80" class="large-text code"><?php
+                                echo \esc_textarea( (string) \get_option( self::REGEX_OPTION_NAME, '' ) );
+                            ?></textarea>
+                            <p class="description">
+                                <?php printf( \esc_html__( 'Format: %s', 'simple-textarea-redirects' ), '<code>source_regex destination_template [status_code]</code>' ); ?><br>
+                                - <?php printf( \esc_html__( 'Example: %s', 'simple-textarea-redirects' ), '<code>^/product/(\d+)/?$ /shop/item.php?id=$1 301</code>' ); ?><br>
+                                - <?php
+                                    echo \wp_kses(
+                                        \__( 'All rules in this box are treated as regular expressions. Delimiters (e.g. <code>#...#</code>) are optional; the plugin will add them if missing.', 'simple-textarea-redirects' ),
+                                        [ 'code' => [] ]
+                                    );
+                                ?>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+
+                <?php \submit_button( \__( 'Save All Redirects', 'simple-textarea-redirects' ) ); ?>
             </form>
         </div>
         <?php
     }
 
     /**
-     * Handle saving of the redirect rules.
+     * Handle saving of the redirect rules from both textareas.
      */
     public static function save_redirect_rules_callback(): void {
         if ( ! \current_user_can( 'manage_options' ) ) {
@@ -166,17 +155,21 @@ final class SimpleTextareaRedirectsPlugin {
             \wp_die( \__( 'Nonce verification failed.', 'simple-textarea-redirects' ) );
         }
 
-        if ( isset( $_POST['redirect_rules_textarea'] ) ) {
-            $raw_rules = (string) $_POST['redirect_rules_textarea'];
+        // Save simple redirects by parsing them into a map
+        if ( isset( $_POST['simple_redirect_rules_textarea'] ) ) {
+            $raw_rules = (string) $_POST['simple_redirect_rules_textarea'];
+            self::save_redirect_rules_from_string($raw_rules);
+        }
+
+        // Save regex redirects as a simple string
+        if ( isset( $_POST['regex_redirect_rules_textarea'] ) ) {
+            $raw_rules = (string) $_POST['regex_redirect_rules_textarea'];
             $sanitized_rules = \sanitize_textarea_field( \wp_unslash( $raw_rules ) );
-            \update_option( self::OPTION_NAME, $sanitized_rules );
+            \update_option( self::REGEX_OPTION_NAME, $sanitized_rules );
         }
 
         $redirect_url = \add_query_arg(
-            [
-                'page' => self::SETTINGS_SLUG,
-                'settings-updated' => 'true'
-            ],
+            ['page' => self::SETTINGS_SLUG, 'settings-updated' => 'true'],
             \admin_url( 'options-general.php' )
         );
         \wp_safe_redirect( $redirect_url );
@@ -184,126 +177,115 @@ final class SimpleTextareaRedirectsPlugin {
     }
 
     /**
-     * Handle the actual redirects on the front-end.
+     * Handle the redirects, checking simple rules first for performance.
      */
     public static function handle_redirects(): void {
-        $redirect_rules_string = (string) \get_option( self::OPTION_NAME, '' );
-
-        if ( empty( $redirect_rules_string ) ) {
-            return;
-        }
-
         $current_request_uri_full = isset($_SERVER['REQUEST_URI']) ? \wp_unslash((string)$_SERVER['REQUEST_URI']) : '';
         
         $path_component = \strtok($current_request_uri_full, '?');
-        if ($path_component === false) {
-            $path_component = $current_request_uri_full;
+        if ($path_component === false) { $path_component = $current_request_uri_full; }
+        $decoded_path = \urldecode($path_component);
+
+        // --- STEP 1: Process O(1) simple redirects first ---
+        $simple_redirect_map = \get_option( self::SIMPLE_OPTION_NAME, [] );
+        if ( !empty( $simple_redirect_map ) && is_array($simple_redirect_map) ) {
+            $temp_normalized_path = \rtrim($decoded_path, '/');
+            $request_path_for_exact_match = ($temp_normalized_path === '' && $decoded_path === '/') ? '/' : $temp_normalized_path;
+            if (empty($request_path_for_exact_match)) { $request_path_for_exact_match = '/'; }
+
+            if (isset($simple_redirect_map[$request_path_for_exact_match])) {
+                $redirect_data = $simple_redirect_map[$request_path_for_exact_match];
+                \wp_safe_redirect( \esc_url_raw( $redirect_data['dest'] ), $redirect_data['status'] );
+                exit;
+            }
         }
-        $current_request_uri_path_for_regex = \urldecode($path_component);
+
+        // --- STEP 2: Only if no simple redirect was found, process O(n) regex redirects ---
+        $regex_rules_string = (string) \get_option( self::REGEX_OPTION_NAME, '' );
+        if ( !empty( $regex_rules_string ) ) {
+            $rules_array = \explode( "\n", $regex_rules_string );
+            foreach ( $rules_array as $rule_line ) {
+                self::process_regex_line( $rule_line, $decoded_path );
+            }
+        }
+    }
+
+    /**
+     * Processes a single regex line.
+     */
+    private static function process_regex_line( string $rule_line, string $request_path ): void {
+        $rule_line_trimmed = \trim( $rule_line );
+        if ( empty( $rule_line_trimmed ) || \str_starts_with( $rule_line_trimmed, '#' ) ) { return; }
         
-        $temp_normalized_path = \rtrim($current_request_uri_path_for_regex, '/');
-        $current_request_uri_path_for_exact_match = ($temp_normalized_path === '' && $current_request_uri_path_for_regex === '/') ? '/' : $temp_normalized_path;
-        if (empty($current_request_uri_path_for_exact_match) && $current_request_uri_path_for_regex !== '/') {
-            $current_request_uri_path_for_exact_match = '/';
-        } elseif (empty($current_request_uri_path_for_exact_match) && $current_request_uri_path_for_regex === '/') {
-             $current_request_uri_path_for_exact_match = '/';
+        $parts = \preg_split( '/\s+/', $rule_line_trimmed, 3 );
+        if ($parts === false || \count( $parts ) < 2) { return; }
+
+        $source = \trim( $parts[0] );
+        $destination = \trim( $parts[1] );
+        $status_code = (isset($parts[2]) && \in_array(\absint($parts[2]), [301, 302, 307, 308], true)) ? \absint($parts[2]) : 301;
+
+        $pattern = $source;
+        if (!\preg_match('/^([\/#~%@!;&`\'"])(.*)\1[imsxeADSUXJu]*$/s', $pattern)) {
+            $pattern = '#' . \str_replace('#', '\#', $pattern) . '#';
+        }
+        
+        if (@\preg_match($pattern, $request_path, $matches)) {
+            $final_destination = \preg_replace_callback('/\$(\d+)/', fn($m) => $matches[$m[1]] ?? '', $destination);
+            \wp_safe_redirect( \esc_url_raw( $final_destination ), $status_code );
+            exit;
+        }
+    }
+    
+    /**
+     * Reconstructs the simple rules string for display in the textarea from the saved map.
+     */
+    private static function get_simple_rules_as_string(): string {
+        $redirect_map = \get_option( self::SIMPLE_OPTION_NAME, [] );
+        if (empty($redirect_map) || !is_array($redirect_map)) {
+            return '';
+        }
+        
+        $lines = [];
+        foreach ($redirect_map as $source => $data) {
+            $lines[] = "{$source} {$data['dest']} {$data['status']}";
+        }
+        return \implode("\n", $lines);
+    }
+    
+    /**
+     * Parses a string of simple redirect rules and saves them as a map.
+     */
+    private static function save_redirect_rules_from_string(string $raw_rules): void {
+        $sanitized_rules_string = \sanitize_textarea_field( \wp_unslash( $raw_rules ) );
+        $lines = \explode("\n", $sanitized_rules_string);
+        $redirect_map = [];
+
+        foreach ($lines as $line) {
+            $trimmed_line = \trim($line);
+            if (empty($trimmed_line) || \str_starts_with($trimmed_line, '#')) {
+                continue;
+            }
+
+            $parts = \preg_split('/\s+/', $trimmed_line, 3);
+            if ($parts === false || count($parts) < 2) {
+                continue;
+            }
+
+            $source = \trim($parts[0]);
+            if ( ! \str_starts_with( $source, '/' ) ) { $source = '/' . $source; }
+            $normalized_source = \rtrim($source, '/');
+            if (empty($normalized_source)) { $normalized_source = '/'; }
+
+            $redirect_map[$normalized_source] = [
+                'dest'   => \trim($parts[1]),
+                'status' => (isset($parts[2]) && \in_array(\absint($parts[2]), [301, 302, 307, 308], true)) ? \absint($parts[2]) : 301,
+            ];
         }
 
-        $rules_array = \explode( "\n", $redirect_rules_string );
+        \update_option(self::SIMPLE_OPTION_NAME, $redirect_map);
 
-        foreach ( $rules_array as $rule_line ) {
-            $rule_line_trimmed = \trim( $rule_line );
-
-            if ( empty( $rule_line_trimmed ) || \str_starts_with( $rule_line_trimmed, '#' ) ) {
-                continue;
-            }
-            
-            $parts = \preg_split( '/\s+/', $rule_line_trimmed, 3 );
-            if ($parts === false) {
-                continue;
-            }
-
-            if ( \count( $parts ) < 2 ) {
-                continue;
-            }
-
-            $source_or_pattern = \trim( $parts[0] );
-            $destination_or_template = \trim( $parts[1] );
-            $status_code = 301;
-
-            if ( isset( $parts[2] ) ) {
-                $potential_status = \absint( \trim( $parts[2] ) );
-                if ( \in_array( $potential_status, [ 301, 302, 307, 308 ], true ) ) {
-                    $status_code = $potential_status;
-                }
-            }
-
-            $is_regex_rule = false;
-            $final_regex_pattern_to_use = null;
-            $matches = [];
-
-            if (\preg_match('/^([\/#~%@!;&`\'"])(.*)\1[imsxeADSUXJu]*$/s', $source_or_pattern, $delimited_matches)) {
-                if (@\preg_match($source_or_pattern, '') !== false) {
-                    $is_regex_rule = true;
-                    $final_regex_pattern_to_use = $source_or_pattern;
-                }
-            }
-
-            if (!$is_regex_rule) {
-                $regex_indicators = [
-                    '^', '$', '*', '+', '?', '.',
-                    '(', ')', '[', ']', '{', '}', '|',
-                    '\\d', '\\D', '\\s', '\\S', '\\w', '\\W', '\\b', '\\B',
-                    '\\.', '\\*', '\\+', '\\?', '\\(', '\\)', '\\[', '\\]', '\\{', '\\}', '\\|', '\\^', '\\$'
-                ];
-                $found_indicator = false;
-                foreach ($regex_indicators as $indicator) {
-                    if (\strpos($source_or_pattern, $indicator) !== false) {
-                        $found_indicator = true;
-                        break;
-                    }
-                }
-
-                if ($found_indicator) {
-                    $escaped_source_for_hash_delimiter = \str_replace('#', '\#', $source_or_pattern);
-                    $test_pattern_with_hash_delimiters = '#' . $escaped_source_for_hash_delimiter . '#';
-                    
-                    if (@\preg_match($test_pattern_with_hash_delimiters, '') !== false) {
-                        $is_regex_rule = true;
-                        $final_regex_pattern_to_use = $test_pattern_with_hash_delimiters;
-                    }
-                }
-            }
-
-            if ( $is_regex_rule ) {
-                if ($final_regex_pattern_to_use && @\preg_match( $final_regex_pattern_to_use, $current_request_uri_path_for_regex, $matches ) ) {
-                    $final_destination = $destination_or_template;
-                    foreach ( $matches as $key => $value ) {
-                        $final_destination = \str_replace( '$' . (string)$key, (string)$value, $final_destination );
-                    }
-                    \wp_safe_redirect( \esc_url_raw( $final_destination ), $status_code );
-                    exit;
-                }
-            } else {
-                $source_path = $source_or_pattern; 
-
-                if ( ! \str_starts_with( $source_path, '/' ) ) {
-                     $source_path = '/' . $source_path;
-                }
-                
-                $normalized_source_path = \rtrim( $source_path, '/' );
-                if ( empty($normalized_source_path) && $source_path === '/' ){
-                    $normalized_source_path = '/';
-                } elseif (empty($normalized_source_path) && $source_path !== '/') {
-                     $normalized_source_path = '/';
-                }
-
-                if ( $normalized_source_path === $current_request_uri_path_for_exact_match ) {
-                    \wp_safe_redirect( \esc_url_raw( $destination_or_template ), $status_code );
-                    exit;
-                }
-            }
-        }
+        // Clean up old option format if it exists
+        \delete_option(self::SIMPLE_TEXTAREA_NAME_LEGACY);
     }
 
     /**
@@ -317,4 +299,3 @@ final class SimpleTextareaRedirectsPlugin {
 // Initialize the plugin
 SimpleTextareaRedirectsPlugin::init();
 
-?>
