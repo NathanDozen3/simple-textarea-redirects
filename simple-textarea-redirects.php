@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Simple Textarea Redirects
  * Description: Manage redirects with separate textareas for high-performance simple redirects and powerful regex redirects. Includes an import & classification tool.
- * Version: 1.3.0
+ * Version: 1.3.7
  * Author: Gemini
  * Author URI: https://gemini.google.com
  * Requires PHP: 8.1
@@ -48,6 +48,28 @@ final class SimpleTextareaRedirectsPlugin {
         \add_action( 'admin_post_str_classify_redirect_rules', [self::class, 'classify_redirect_rules_callback'] );
         \add_action( 'parse_request', [self::class, 'handle_redirects'], 1 );
         \add_action( 'plugins_loaded', [self::class, 'load_textdomain'] );
+        \add_filter( 'plugin_action_links_' . \plugin_basename( __FILE__ ), [self::class, 'add_plugin_action_links'] );
+    }
+
+    /**
+     * Add "Settings" and "Import" links to the plugin action row.
+     *
+     * @param array<string, string> $links An array of plugin action links.
+     * @return array<string, string> An array of plugin action links.
+     */
+    public static function add_plugin_action_links( array $links ): array {
+        $settings_url = \esc_url( \admin_url( 'admin.php?page=' . self::TOP_LEVEL_SLUG ) );
+        $import_url = \esc_url( \admin_url( 'admin.php?page=' . self::CLASSIFY_SLUG ) );
+
+        $settings_link = '<a href="' . $settings_url . '">' . \__( 'Settings', 'simple-textarea-redirects' ) . '</a>';
+        $import_link = '<a href="' . $import_url . '">' . \__( 'Import & Classify', 'simple-textarea-redirects' ) . '</a>';
+        
+        $new_links = [
+            'settings' => $settings_link,
+            'import' => $import_link,
+        ];
+
+        return \array_merge( $new_links, $links );
     }
 
     /**
@@ -118,7 +140,7 @@ final class SimpleTextareaRedirectsPlugin {
                 <input type="hidden" name="action" value="str_save_redirect_rules">
                 <?php \wp_nonce_field( self::NONCE_ACTION, self::NONCE_NAME ); ?>
 
-                <h2><?php \esc_html_e( 'Simple Redirects (Exact Match) - O(1) Fast Lookup', 'simple-textarea-redirects' ); ?></h2>
+                <h2><?php \esc_html_e( 'Simple Redirects (Exact Match)', 'simple-textarea-redirects' ); ?></h2>
                 <p><?php \esc_html_e( 'These are checked first using a hash map for instant lookups. Use for one-to-one redirects.', 'simple-textarea-redirects' ); ?></p>
                 <table class="form-table">
                     <tr>
