@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Simple Textarea Redirects
  * Description: Manage redirects with separate textareas for high-performance simple redirects and powerful regex redirects. Includes an import & classification tool.
- * Version: 1.3.7
+ * Version: 1.3.8
  * Author: Gemini
  * Author URI: https://gemini.google.com
  * Requires PHP: 8.1
@@ -64,12 +64,7 @@ final class SimpleTextareaRedirectsPlugin {
         $settings_link = '<a href="' . $settings_url . '">' . \__( 'Settings', 'simple-textarea-redirects' ) . '</a>';
         $import_link = '<a href="' . $import_url . '">' . \__( 'Import & Classify', 'simple-textarea-redirects' ) . '</a>';
         
-        $new_links = [
-            'settings' => $settings_link,
-            'import' => $import_link,
-        ];
-
-        return \array_merge( $new_links, $links );
+        return \array_merge( ['settings' => $settings_link, 'import' => $import_link], $links );
     }
 
     /**
@@ -130,7 +125,11 @@ final class SimpleTextareaRedirectsPlugin {
             if ( isset( $_GET['classified'] ) && $_GET['classified'] === 'true' ) {
                 $simple_count = \absint($_GET['simple'] ?? 0);
                 $regex_count = \absint($_GET['regex'] ?? 0);
-                $message = \sprintf(\__('Classification complete. Found %d simple and %d regex rules. Please review and click "Save All Redirects" to apply.', 'simple-textarea-redirects'), $simple_count, $regex_count);
+                $message = \sprintf(
+                    \__('Classification complete. Found %s simple and %s regex rules. Please review and click "Save All Redirects" to apply.', 'simple-textarea-redirects'),
+                    \number_format_i18n($simple_count),
+                    \number_format_i18n($regex_count)
+                );
                 \add_settings_error( 'str_messages', 'str_message_id', $message, 'info' );
             }
             \settings_errors( 'str_messages' );
@@ -195,7 +194,8 @@ final class SimpleTextareaRedirectsPlugin {
                         <td>
                             <textarea id="mixed_redirect_rules_textarea" name="mixed_redirect_rules_textarea" rows="20" class="large-text code"></textarea>
                             <p class="description">
-                                <?php \esc_html_e( 'Paste your list from a .htaccess file, CSV, or other source. One rule per line.', 'simple-textarea-redirects' ); ?>
+                                <?php \esc_html_e( 'Paste your list from a .htaccess file, CSV, or other source. One rule per line.', 'simple-textarea-redirects' ); ?><br>
+                                <em><?php \esc_html_e( 'Note: Paths containing special characters like ( or ) may be incorrectly classified as regex. Please review the results before saving.', 'simple-textarea-redirects' ); ?></em>
                             </p>
                         </td>
                     </tr>
@@ -344,7 +344,19 @@ final class SimpleTextareaRedirectsPlugin {
             $pattern = '#' . \str_replace('#', '\#', $pattern) . '#';
         }
         
-        if (@\preg_match($pattern, $request_path, $matches)) {
+        // Temporary error handler to log invalid regex without breaking the site.
+        \set_error_handler(function($errno, $errstr) use ($pattern) {
+            if ($errno === E_WARNING && \str_starts_with($errstr, 'preg_match():')) {
+                \error_log('Simple Textarea Redirects Plugin: Invalid regex pattern provided: "' . $pattern . '". Error: ' . $errstr);
+            }
+            return true; // Suppress the warning from showing on the front-end.
+        });
+
+        $match_result = \preg_match($pattern, $request_path, $matches);
+
+        \restore_error_handler(); // IMPORTANT: Always restore the default error handler.
+
+        if ($match_result) {
             $final_destination = \preg_replace_callback('/\$(\d+)/', fn($m) => $matches[$m[1]] ?? '', $destination);
             \wp_safe_redirect( \esc_url_raw( $final_destination ), $status_code );
             exit;
